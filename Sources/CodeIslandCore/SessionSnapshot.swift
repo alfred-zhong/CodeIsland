@@ -99,6 +99,8 @@ public struct SessionSnapshot: Sendable {
     public var zellijPaneId: String?    // Zellij pane id (numeric string) from ZELLIJ_PANE_ID env var
     public var zellijSessionName: String? // Zellij session name from ZELLIJ_SESSION_NAME env var
     public var weztermPaneId: String?   // WezTerm / Kaku pane id (numeric string) from WEZTERM_PANE env var
+    public var supersetWorkspaceId: String? // Superset workspace UUID (from SUPERSET_WORKSPACE_ID env var); presence means running inside Superset
+    public var supersetPaneId: String?  // Superset pane/terminal id (from SUPERSET_PANE_ID / SUPERSET_TERMINAL_ID env var)
     public var cliPid: pid_t?            // CLI process PID (from bridge _ppid)
     public var cliStartTime: Date?       // Start time of the tracked CLI PID (guards PID reuse)
     public var source: String = "claude" // "claude" or "codex"
@@ -433,6 +435,10 @@ public struct SessionSnapshot: Sendable {
             if lower.contains("android.studio") { return "Android Studio" }
             if lower.contains("antigravity") { return "Antigravity" }
         }
+        // Superset spoofs TERM_PROGRAM to "kitty" and strips __CFBundleIdentifier, so the only
+        // way to label it correctly is its own SUPERSET_* env vars. Check before the TERM_PROGRAM
+        // fallback below, otherwise it would mislabel as "Kitty". (#213)
+        if supersetWorkspaceId != nil || supersetPaneId != nil { return "Superset" }
         // Fallback to TERM_PROGRAM
         guard let app = termApp else { return nil }
         let lower = app.lowercased()
@@ -782,6 +788,12 @@ public func reduceEvent(
         if let weztermPane = event.rawJSON["_wezterm_pane"] as? String, !weztermPane.isEmpty {
             sessions[sessionId]?.weztermPaneId = weztermPane
         }
+        if let supersetWs = event.rawJSON["_superset_workspace_id"] as? String, !supersetWs.isEmpty {
+            sessions[sessionId]?.supersetWorkspaceId = supersetWs
+        }
+        if let supersetPane = event.rawJSON["_superset_pane_id"] as? String, !supersetPane.isEmpty {
+            sessions[sessionId]?.supersetPaneId = supersetPane
+        }
         if let env = event.rawJSON["_env"] as? [String: String] {
             applyEnvMetadata(into: &sessions, sessionId: sessionId, env: env)
         }
@@ -898,6 +910,14 @@ private func applyEnvMetadata(into sessions: inout [String: SessionSnapshot], se
        let pane = env["WEZTERM_PANE"], !pane.isEmpty {
         sessions[sessionId]?.weztermPaneId = pane
     }
+    if sessions[sessionId]?.supersetWorkspaceId == nil,
+       let workspace = env["SUPERSET_WORKSPACE_ID"], !workspace.isEmpty {
+        sessions[sessionId]?.supersetWorkspaceId = workspace
+    }
+    if sessions[sessionId]?.supersetPaneId == nil,
+       let pane = env["SUPERSET_PANE_ID"] ?? env["SUPERSET_TERMINAL_ID"], !pane.isEmpty {
+        sessions[sessionId]?.supersetPaneId = pane
+    }
 }
 
 public func extractMetadata(into sessions: inout [String: SessionSnapshot], sessionId: String, event: HookEvent) {
@@ -982,6 +1002,14 @@ public func extractMetadata(into sessions: inout [String: SessionSnapshot], sess
     // WezTerm / Kaku pane id (injected by bridge from WEZTERM_PANE env var)
     if let weztermPane = event.rawJSON["_wezterm_pane"] as? String, !weztermPane.isEmpty {
         sessions[sessionId]?.weztermPaneId = weztermPane
+    }
+    // Superset workspace / pane (injected by bridge from SUPERSET_* env vars). Presence routes
+    // activation to com.superset.desktop instead of the spoofed kitty TERM_PROGRAM. (#213)
+    if let supersetWs = event.rawJSON["_superset_workspace_id"] as? String, !supersetWs.isEmpty {
+        sessions[sessionId]?.supersetWorkspaceId = supersetWs
+    }
+    if let supersetPane = event.rawJSON["_superset_pane_id"] as? String, !supersetPane.isEmpty {
+        sessions[sessionId]?.supersetPaneId = supersetPane
     }
     if let remoteHostId = event.rawJSON["_remote_host_id"] as? String, !remoteHostId.isEmpty {
         sessions[sessionId]?.remoteHostId = remoteHostId
