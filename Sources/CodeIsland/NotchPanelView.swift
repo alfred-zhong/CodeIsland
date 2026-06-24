@@ -384,7 +384,7 @@ private struct CompactLeftWing: View {
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundStyle(toolStatusColor(tool))
                         .lineLimit(1)
-                        .fixedSize()
+                        .truncationMode(.tail)
                         .transition(.opacity)
                 }
             }
